@@ -1,5 +1,6 @@
 #include "our_gl.h"
 #include "model.h"
+#include <cstdlib>
 
 extern mat<4,4> ModelView, Perspective; // "OpenGL" state matrices and
 extern std::vector<double> zbuffer;     // the depth buffer
@@ -11,10 +12,36 @@ struct PhongShader : IShader {
     vec4 varying_nrm[3]; // normal per vertex to be interpolated by the fragment shader
     vec4 tri[3];         // triangle in view coordinates
 
+    /**
+     * PhongShader 构造函数
+     * 初始化着色器状态，包括模型引用和光照方向
+     *
+     * @param light 世界坐标系中的光照方向向量
+     * @param m     要渲染的模型引用
+     *
+     * 工作流程：
+     * 1. 存储模型引用
+     * 2. 将光照方向转换到观察坐标系：l = normalized(ModelView * light)
+     *    光照方向向量w分量为0（方向光）
+     */
     PhongShader(const vec3 light, const Model &m) : model(m) {
         l = normalized((ModelView*vec4{light.x, light.y, light.z, 0.})); // transform the light vector to view coordinates
     }
 
+    /**
+     * 顶点着色器
+     * 处理单个顶点，计算其在裁剪空间中的位置并准备插值变量
+     *
+     * @param face 面索引（当前处理的三角形）
+     * @param vert 顶点在面中的索引（0,1,2）
+     * @return 顶点在裁剪空间中的齐次坐标
+     *
+     * 工作流程：
+     * 1. 获取并存储顶点的纹理坐标和法线（观察坐标系）
+     * 2. 将顶点位置从模型坐标系变换到观察坐标系
+     * 3. 存储观察坐标系中的顶点位置（用于后续计算切线空间）
+     * 4. 应用透视投影，输出裁剪空间坐标
+     */
     virtual vec4 vertex(const int face, const int vert) {
         varying_uv[vert]  = model.uv(face, vert);
         varying_nrm[vert] = ModelView.invert_transpose() * model.normal(face, vert);
@@ -23,6 +50,25 @@ struct PhongShader : IShader {
         return Perspective * gl_Position;                         // in clip coordinates
     }
 
+    /**
+     * 片段着色器（Phong光照模型）
+     * 计算每个像素的最终颜色，实现法线贴图、漫反射、高光反射
+     *
+     * @param bar 重心坐标（用于插值顶点属性）
+     * @return pair<bool,TGAColor>：是否丢弃片段 + 最终颜色
+     *
+     * 光照计算：
+     * 1. 构建TBN矩阵：从插值的法线、切线和副切线构建切线空间到观察空间的变换
+     * 2. 法线贴图采样：从法线贴图获取切线空间法线，变换到观察空间
+     * 3. 漫反射：lambert项 = max(0, n·l)
+     * 4. 高光反射：blinn-phong项 = (r·v)^shininess，r为反射光方向
+     * 5. 环境光：常量环境光项
+     *
+     * 纹理采样：
+     * - 漫反射贴图：基础颜色
+     * - 法线贴图：切线空间法线
+     * - 高光贴图：镜面反射强度
+     */
     virtual std::pair<bool,TGAColor> fragment(const vec3 bar) const {
         mat<2,4> E = { tri[1]-tri[0], tri[2]-tri[0] };
         mat<2,2> U = { varying_uv[1]-varying_uv[0], varying_uv[2]-varying_uv[0] };
@@ -44,6 +90,28 @@ struct PhongShader : IShader {
     }
 };
 
+/**
+ * 程序主入口
+ * 实现完整的渲染管线：从OBJ模型加载到TGA图像输出
+ *
+ * @param argc 命令行参数数量
+ * @param argv 命令行参数数组
+ * @return 程序退出代码（0=成功，1=错误）
+ *
+ * 渲染管线：
+ * 1. 初始化：设置相机、投影、视口、深度缓冲
+ * 2. 模型加载：加载OBJ文件和关联的纹理贴图
+ * 3. 着色器初始化：创建PhongShader实例
+ * 4. 三角形遍历：对每个面的三个顶点调用顶点着色器
+ * 5. 光栅化：将三角形转换为像素，调用片段着色器
+ * 6. 输出：将帧缓冲写入TGA文件
+ *
+ * 默认参数：
+ * - 图像尺寸：800×800
+ * - 光照方向：(1,1,1)
+ * - 相机位置：(-1,0,2)，看向原点
+ * - 视口：居中，占屏幕7/8区域
+ */
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << " obj/model.obj" << std::endl;
@@ -75,6 +143,7 @@ int main(int argc, char** argv) {
     }
 
     framebuffer.write_tga_file("framebuffer.tga");
+    system("pause");
     return 0;
 }
 

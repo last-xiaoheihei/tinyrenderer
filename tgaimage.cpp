@@ -2,12 +2,40 @@
 #include <cstring>
 #include "tgaimage.h"
 
+/**
+ * TGAImage 类构造函数
+ * 创建指定尺寸和位深的TGA图像，并用给定颜色初始化所有像素
+ *
+ * @param w   图像宽度（像素）
+ * @param h   图像高度（像素）
+ * @param bpp 每像素字节数（1=灰度, 3=RGB, 4=RGBA）
+ * @param c   初始填充颜色
+ *
+ * 工作流程：
+ * 1. 初始化宽度、高度、位深成员变量
+ * 2. 分配像素数据缓冲区（w*h*bpp字节）
+ * 3. 遍历所有像素，用指定颜色填充
+ */
 TGAImage::TGAImage(const int w, const int h, const int bpp, TGAColor c) : w(w), h(h), bpp(bpp), data(w*h*bpp, 0) {
     for (int j=0; j<h; j++)
         for (int i=0; i<w; i++)
             set(i, j, c);
 }
 
+/**
+ * 从TGA文件读取图像数据
+ * 支持未压缩（RAW）和RLE（行程编码）格式的TGA文件
+ *
+ * @param filename TGA文件路径
+ * @return 成功读取返回true，失败返回false
+ *
+ * 工作流程：
+ * 1. 以二进制模式打开文件
+ * 2. 读取TGA文件头，验证格式有效性
+ * 3. 根据数据编码类型（RAW或RLE）加载像素数据
+ * 4. 根据图像描述符调整图像方向（垂直/水平翻转）
+ * 5. 输出图像尺寸和位深信息
+ */
 bool TGAImage::read_tga_file(const std::string filename) {
     std::ifstream in;
     in.open(filename, std::ios::binary);
@@ -53,6 +81,18 @@ bool TGAImage::read_tga_file(const std::string filename) {
     return true;
 }
 
+/**
+ * 加载RLE（Run-Length Encoding）压缩的TGA像素数据
+ * RLE编码将连续的相同像素压缩为"run"数据包，不同像素存储为"raw"数据包
+ *
+ * @param in 已打开的输入文件流（定位在像素数据开始处）
+ * @return 成功加载返回true，失败返回false
+ *
+ * RLE格式解析：
+ * - 数据包头字节：最高位为0表示raw包，为1表示run包
+ * - raw包：头字节低7位+1 = 后面跟随的像素数量，每个像素独立存储
+ * - run包：头字节低7位+1 = 重复像素数量，后面跟随一个像素值重复多次
+ */
 bool TGAImage::load_rle_data(std::ifstream &in) {
     size_t pixelcount = w*h;
     size_t currentpixel = 0;
@@ -102,6 +142,22 @@ bool TGAImage::load_rle_data(std::ifstream &in) {
     return true;
 }
 
+/**
+ * 将图像数据写入TGA文件
+ * 可选择输出格式（RAW或RLE压缩）和图像方向
+ *
+ * @param filename 输出文件路径
+ * @param vflip    是否垂直翻转图像（true=底部原点，false=顶部原点）
+ * @param rle      是否使用RLE压缩
+ * @return 成功写入返回true，失败返回false
+ *
+ * 工作流程：
+ * 1. 打开输出文件（二进制模式）
+ * 2. 填充TGA文件头信息（尺寸、位深、编码类型）
+ * 3. 根据rle参数选择RAW或RLE编码写入像素数据
+ * 4. 写入开发区域和扩展区域引用（空）
+ * 5. 写入TGA文件尾标识"TRUEVISION-XFILE."
+ */
 bool TGAImage::write_tga_file(const std::string filename, const bool vflip, const bool rle) const {
     constexpr std::uint8_t developer_area_ref[4] = {0, 0, 0, 0};
     constexpr std::uint8_t extension_area_ref[4] = {0, 0, 0, 0};
@@ -136,6 +192,19 @@ err:
     return false;
 }
 
+/**
+ * 将图像数据编码为RLE格式并写入输出流
+ * 实现TGA RLE压缩算法，将连续相同像素编码为run包，不同像素编码为raw包
+ *
+ * @param out 输出文件流
+ * @return 成功编码并写入返回true，失败返回false
+ *
+ * 编码算法：
+ * 1. 遍历所有像素，查找连续的相同像素序列（run）或不同像素序列（raw）
+ * 2. 每个数据包最多包含128个像素
+ * 3. run包：头字节 = 重复次数-1 | 0x80，后跟一个像素值
+ * 4. raw包：头字节 = 像素数量-1，后跟相应数量的像素值
+ */
 bool TGAImage::unload_rle_data(std::ofstream &out) const {
     const std::uint8_t max_chunk_length = 128;
     size_t npixels = w*h;
@@ -169,6 +238,18 @@ bool TGAImage::unload_rle_data(std::ofstream &out) const {
     return true;
 }
 
+/**
+ * 获取指定位置像素的颜色值
+ * 进行边界检查，坐标越界时返回默认颜色（全0）
+ *
+ * @param x 像素X坐标（从左到右，0-based）
+ * @param y 像素Y坐标（从上到下，0-based）
+ * @return 对应位置的TGAColor结构，包含RGBA/BGRA值（根据bpp）
+ *
+ * 内存布局：
+ * 像素数据按行优先存储：data[(x + y*width) * bpp + channel]
+ * channel顺序：BGR(A) 或 灰度
+ */
 TGAColor TGAImage::get(const int x, const int y) const {
     if (!data.size() || x<0 || y<0 || x>=w || y>=h) return {};
     TGAColor ret = {0, 0, 0, 0, bpp};
@@ -177,11 +258,32 @@ TGAColor TGAImage::get(const int x, const int y) const {
     return ret;
 }
 
+/**
+ * 设置指定位置像素的颜色值
+ * 进行边界检查，坐标越界时静默返回（无操作）
+ *
+ * @param x 像素X坐标
+ * @param y 像素Y坐标
+ * @param c 要设置的TGAColor颜色值
+ *
+ * 实现细节：
+ * 使用memcpy快速复制bpp个字节到像素数据缓冲区
+ * 不进行颜色空间转换，直接存储提供的颜色分量
+ */
 void TGAImage::set(int x, int y, const TGAColor &c) {
     if (!data.size() || x<0 || y<0 || x>=w || y>=h) return;
     memcpy(data.data()+(x+y*w)*bpp, c.bgra, bpp);
 }
 
+/**
+ * 水平翻转图像（镜像翻转）
+ * 将图像左右对调，用于调整TGA文件的坐标系
+ *
+ * 算法：
+ * 对于每一行，交换第i列和第(width-1-i)列的像素
+ * 只遍历左半部分列，与对应右半部分交换
+ * 对每个像素的所有颜色通道分别交换
+ */
 void TGAImage::flip_horizontally() {
     for (int i=0; i<w/2; i++)
         for (int j=0; j<h; j++)
@@ -189,6 +291,15 @@ void TGAImage::flip_horizontally() {
                 std::swap(data[(i+j*w)*bpp+b], data[(w-1-i+j*w)*bpp+b]);
 }
 
+/**
+ * 垂直翻转图像（上下翻转）
+ * 将图像上下对调，用于调整TGA文件的坐标系
+ *
+ * 算法：
+ * 对于每一列，交换第j行和第(height-1-j)行的像素
+ * 只遍历上半部分行，与对应下半部分交换
+ * 对每个像素的所有颜色通道分别交换
+ */
 void TGAImage::flip_vertically() {
     for (int i=0; i<w; i++)
         for (int j=0; j<h/2; j++)
@@ -196,10 +307,20 @@ void TGAImage::flip_vertically() {
                 std::swap(data[(i+j*w)*bpp+b], data[(i+(h-1-j)*w)*bpp+b]);
 }
 
+/**
+ * 获取图像宽度
+ *
+ * @return 图像宽度（像素）
+ */
 int TGAImage::width() const {
     return w;
 }
 
+/**
+ * 获取图像高度
+ *
+ * @return 图像高度（像素）
+ */
 int TGAImage::height() const {
     return h;
 }
